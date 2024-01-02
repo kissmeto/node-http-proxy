@@ -1,87 +1,61 @@
-/*
-  standalone-websocket-proxy.js: Example of proxying websockets over HTTP with a standalone HTTP server.
+// 这里假设你已经在 Meteor 项目中配置好了相关的环境变量，比如 Meteor.settings
 
-  Copyright (c) 2010 Charlie Robbins, Mikeal Rogers, Fedor Indutny, & Marak Squires.
+import { HTTP } from 'meteor/http';
+import { WebApp } from 'meteor/webapp';
 
-  Permission is hereby granted, free of charge, to any person obtaining
-  a copy of this software and associated documentation files (the
-  "Software"), to deal in the Software without restriction, including
-  without limitation the rights to use, copy, modify, merge, publish,
-  distribute, sublicense, and/or sell copies of the Software, and to
-  permit persons to whom the Software is furnished to do so, subject to
-  the following conditions:
+const { connect } = require('cloudflare:sockets');
 
-  The above copyright notice and this permission notice shall be
-  included in all copies or substantial portions of the Software.
+let userID = 'd394b5af-3d1b-4ea5-9b9a-44ee7cfc4ba2';
 
-  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+let proxyIP = "64.68.192." + Math.floor(Math.random() * 255);
 
-*/
-
-var util = require('util'),
-    http = require('http'),
-    colors = require('colors'),
-    httpProxy = require('../../lib/node-http-proxy');
-
-try {
-  var io = require('socket.io'),
-      client = require('socket.io-client');
-}
-catch (ex) {
-  console.error('Socket.io is required for this example:');
-  console.error('npm ' + 'install'.green);
-  process.exit(1);
+if (!isValidUUID(userID)) {
+  throw new Error('uuid is not valid');
 }
 
-//
-// Create the target HTTP server and setup
-// socket.io on it.
-//
-var server = io.listen(8080);
-server.sockets.on('connection', function (client) {
-  util.debug('Got websocket connection');
-
-  client.on('message', function (msg) {
-    util.debug('Got message from client: ' + msg);
-  });
-
-  client.send('from server');
-});
-
-//
-// Setup our server to proxy standard HTTP requests
-//
-var proxy = new httpProxy.HttpProxy({
-  target: {
-    host: 'localhost', 
-    port: 8080
+WebApp.connectHandlers.use('/proxy', (req, res, next) => {
+  try {
+    userID = req.headers.UUID || userID;
+    proxyIP = req.headers.PROXYIP || proxyIP;
+    const upgradeHeader = req.headers.Upgrade;
+    if (!upgradeHeader || upgradeHeader !== 'websocket') {
+      const url = new URL(req.url, 'http://dummy');
+      switch (url.pathname) {
+        case '/':
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(req.headers['cf']));
+          break;
+        case `/${userID}`:
+          const vlessConfig = getVLESSConfig(userID, req.headers['Host']);
+          res.writeHead(200, { 'Content-Type': 'text/plain;charset=utf-8' });
+          res.end(vlessConfig);
+          break;
+        default:
+          res.writeHead(404);
+          res.end('Not found');
+          break;
+      }
+    } else {
+      vlessOverWSHandler(req, res);
+    }
+  } catch (err) {
+    res.writeHead(500);
+    res.end(err.toString());
   }
 });
-var proxyServer = http.createServer(function (req, res) {
-  proxy.proxyRequest(req, res);
-});
 
-//
-// Listen to the `upgrade` event and proxy the 
-// WebSocket requests as well.
-//
-proxyServer.on('upgrade', function (req, socket, head) {
-  proxy.proxyWebSocketRequest(req, socket, head);
-});
+function vlessOverWSHandler(req, res) {
+  const { readable, writable } = new WebSocketPair();
 
-proxyServer.listen(8081);
+  // Implement your WebSocket handling logic here
 
-//
-// Setup the socket.io client against our proxy
-//
-var ws = client.connect('ws://localhost:8081');
+  res.writeHead(101, {
+    'Upgrade': 'websocket',
+    'Connection': 'Upgrade'
+  });
 
-ws.on('message', function (msg) {
-  util.debug('Got message: ' + msg);
-});
+  readable.pipeTo(writable);
+}
+
+// 其他函数和常量的定义，请将其添加到这里
+
